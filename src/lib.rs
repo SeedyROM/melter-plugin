@@ -1,6 +1,9 @@
 use nih_plug::prelude::*;
 use std::sync::Arc;
 
+mod compression;
+mod filters;
+mod nonlinearity;
 mod oversampling;
 
 // Constants for oversampling
@@ -10,14 +13,29 @@ const DEFAULT_OVERSAMPLING_FACTOR: usize = 1;
 const MAX_OVERSAMPLING_TIMES: usize = oversampling_factor_to_times(MAX_OVERSAMPLING_FACTOR);
 const MAX_OVERSAMPLED_BLOCK_SIZE: usize = MAX_BLOCK_SIZE * MAX_OVERSAMPLING_TIMES;
 
+/// A macro to load a param into the scratch buffer
+macro_rules! param_next_block {
+    ($self:expr, $param_name:ident, $block_size:expr) => {{
+        let buffer = &mut $self.scratch_buffers.$param_name;
+        $self
+            .params
+            .$param_name
+            .smoothed
+            .next_block(buffer, $block_size);
+        buffer
+    }};
+}
+
 struct ScratchBuffers {
     gain: [f32; MAX_OVERSAMPLED_BLOCK_SIZE],
+    drive: [f32; MAX_OVERSAMPLED_BLOCK_SIZE],
 }
 
 impl Default for ScratchBuffers {
     fn default() -> Self {
         Self {
             gain: [0.0; MAX_OVERSAMPLED_BLOCK_SIZE],
+            drive: [0.0; MAX_OVERSAMPLED_BLOCK_SIZE],
         }
     }
 }
@@ -32,6 +50,9 @@ struct Melter {
 struct MelterParams {
     #[id = "gain"]
     pub gain: FloatParam,
+
+    #[id = "drive"]
+    pub drive: FloatParam,
 
     #[id = "oversampling_factor"]
     pub oversampling_factor: IntParam,
@@ -51,7 +72,7 @@ impl Default for MelterParams {
     fn default() -> Self {
         Self {
             gain: FloatParam::new(
-                "Drive",
+                "Gain",
                 util::db_to_gain(0.0),
                 FloatRange::Skewed {
                     min: util::db_to_gain(0.0),
@@ -63,6 +84,9 @@ impl Default for MelterParams {
             .with_unit(" dB")
             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+
+            drive: FloatParam::new("Drive", 1.0, FloatRange::Linear { min: 0.0, max: 2.0 })
+                .with_smoother(SmoothingStyle::Logarithmic(50.0)),
 
             oversampling_factor: IntParam::new(
                 "Oversampling",
@@ -167,19 +191,20 @@ impl Plugin for Melter {
             let block_len = block.samples();
             let upsampled_block_len = block_len * oversampling_times;
 
-            // Get the gain value
-            let gain = &mut self.scratch_buffers.gain;
-            self.params
-                .gain
-                .smoothed
-                .next_block(gain, upsampled_block_len);
+            // Get the params for this block
+            let gain = param_next_block!(self, gain, upsampled_block_len);
+            let drive = param_next_block!(self, drive, upsampled_block_len);
 
             for (block_channel, oversampler) in block.into_iter().zip(self.oversamplers.iter_mut())
             {
                 oversampler.process(block_channel, oversampling_factor, |upsampled| {
-                    for (sample, gain) in upsampled.iter_mut().zip(gain.iter()) {
-                        let distorted_sample = (*sample * *gain).tanh();
-                        *sample = distorted_sample;
+                    for (sample, (gain, drive)) in
+                        upsampled.iter_mut().zip(gain.iter().zip(drive.iter()))
+                    {
+                        // Apply the gain
+                        *sample *= gain;
+                        // Apply the soft clipper
+                        *sample = nonlinearity::cubic(*sample, *drive, 0.5);
                     }
                 });
             }
