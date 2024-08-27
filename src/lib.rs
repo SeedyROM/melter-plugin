@@ -43,6 +43,7 @@ impl Default for ScratchBuffers {
 struct Melter {
     params: Arc<MelterParams>,
     oversamplers: Vec<oversampling::Lanczos3Oversampler>,
+    dc_blockers: Vec<filters::DCBlocker>,
     scratch_buffers: Box<ScratchBuffers>,
 }
 
@@ -63,6 +64,7 @@ impl Default for Melter {
         Self {
             params: Arc::new(MelterParams::default()),
             oversamplers: Vec::new(),
+            dc_blockers: Vec::new(),
             scratch_buffers: Box::default(),
         }
     }
@@ -157,6 +159,9 @@ impl Plugin for Melter {
             oversampling::Lanczos3Oversampler::new(MAX_BLOCK_SIZE, MAX_OVERSAMPLING_FACTOR)
         });
 
+        self.dc_blockers
+            .resize_with(num_channels, filters::DCBlocker::new);
+
         if let Some(oversampler) = self.oversamplers.first() {
             context.set_latency_samples(
                 oversampler.latency(self.params.oversampling_factor.value() as usize),
@@ -195,8 +200,11 @@ impl Plugin for Melter {
             let gain = param_next_block!(self, gain, upsampled_block_len);
             let drive = param_next_block!(self, drive, upsampled_block_len);
 
-            for (block_channel, oversampler) in block.into_iter().zip(self.oversamplers.iter_mut())
-            {
+            for (block_channel, (oversampler, dc_blocker)) in block.into_iter().zip(
+                self.oversamplers
+                    .iter_mut()
+                    .zip(self.dc_blockers.iter_mut()),
+            ) {
                 oversampler.process(block_channel, oversampling_factor, |upsampled| {
                     for (sample, (gain, drive)) in
                         upsampled.iter_mut().zip(gain.iter().zip(drive.iter()))
@@ -205,6 +213,7 @@ impl Plugin for Melter {
                         *sample *= gain;
                         // Apply the soft clipper
                         *sample = nonlinearity::cubic(*sample, *drive, 0.5);
+                        *sample = dc_blocker.process(*sample, 0.99420);
                     }
                 });
             }
