@@ -213,6 +213,7 @@ impl Plugin for Melter {
                         *sample *= gain;
                         // Apply the soft clipper
                         *sample = nonlinearity::cubic(*sample, *drive, 0.5);
+                        // Apply the DC blocker, using the this nice magic coefficient!
                         *sample = dc_blocker.process(*sample, 0.99420);
                     }
                 });
