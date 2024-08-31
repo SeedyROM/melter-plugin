@@ -30,9 +30,6 @@ macro_rules! param_next_block {
 struct ScratchBuffers {
     gain: [f32; MAX_OVERSAMPLED_BLOCK_SIZE],
     drive: [f32; MAX_OVERSAMPLED_BLOCK_SIZE],
-    low_boost: [f32; MAX_OVERSAMPLED_BLOCK_SIZE],
-    mid_boost: [f32; MAX_OVERSAMPLED_BLOCK_SIZE],
-    high_boost: [f32; MAX_OVERSAMPLED_BLOCK_SIZE],
 }
 
 impl Default for ScratchBuffers {
@@ -40,9 +37,6 @@ impl Default for ScratchBuffers {
         Self {
             gain: [0.0; MAX_OVERSAMPLED_BLOCK_SIZE],
             drive: [0.0; MAX_OVERSAMPLED_BLOCK_SIZE],
-            low_boost: [0.0; MAX_OVERSAMPLED_BLOCK_SIZE],
-            mid_boost: [0.0; MAX_OVERSAMPLED_BLOCK_SIZE],
-            high_boost: [0.0; MAX_OVERSAMPLED_BLOCK_SIZE],
         }
     }
 }
