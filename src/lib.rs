@@ -46,6 +46,7 @@ struct Melter {
     oversamplers: Vec<oversampling::Lanczos3Oversampler>,
     dc_blockers: Vec<filters::DCBlocker>,
     parametric_eqs: Vec<equalization::ParametricEQ>,
+    slews: Vec<nonlinearity::SlewDistortion>,
     scratch_buffers: Box<ScratchBuffers>,
     sample_rate: f32,
 }
@@ -57,6 +58,7 @@ impl Default for Melter {
             oversamplers: Vec::new(),
             dc_blockers: Vec::new(),
             parametric_eqs: Vec::new(),
+            slews: Vec::new(),
             scratch_buffers: Box::default(),
             sample_rate: 44100.0,
         }
@@ -106,7 +108,7 @@ impl Default for MelterParams {
             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
 
-            drive: FloatParam::new("Drive", 1.0, FloatRange::Linear { min: 0.0, max: 2.0 })
+            drive: FloatParam::new("Drive", 0.009, FloatRange::Linear { min: 0.0, max: 0.2 })
                 .with_smoother(SmoothingStyle::Logarithmic(50.0)),
 
             low_boost: FloatParam::new(
@@ -231,6 +233,9 @@ impl Plugin for Melter {
         self.dc_blockers
             .resize_with(num_channels, || filters::DCBlocker::new(sample_rate));
 
+        self.slews
+            .resize_with(num_channels, || nonlinearity::SlewDistortion::new(0.1, 0.1));
+
         if let Some(oversampler) = self.oversamplers.first() {
             context.set_latency_samples(
                 oversampler.latency(self.params.oversampling_factor.value() as usize),
@@ -281,6 +286,7 @@ impl Plugin for Melter {
                 let eq = &mut self.parametric_eqs[channel_num];
                 let oversampler = &mut self.oversamplers[channel_num];
                 let dc_blocker = &mut self.dc_blockers[channel_num];
+                let slew = &mut self.slews[channel_num];
 
                 // Set the EQ band params
                 let low_boost = self.params.low_boost.smoothed.next();
@@ -304,8 +310,14 @@ impl Plugin for Melter {
                             *sample = eq.process(*sample);
                         }
 
-                        // Apply the cubic non-linearity
-                        *sample = nonlinearity::cubic(*sample, _drive, 0.5);
+                        // // Apply the cubic non-linearity
+                        // *sample = nonlinearity::cubic(*sample, _drive, 0.5);
+
+                        slew.set_pos_rate(_drive / oversampling_times as f32);
+                        slew.set_neg_rate(_drive / 2.0 / oversampling_times as f32);
+
+                        // Apply the slew distortion
+                        *sample = slew.process(*sample);
 
                         // Apply the DC blocker, using the this nice magic coefficient!
                         *sample = dc_blocker.process(*sample);
@@ -314,6 +326,9 @@ impl Plugin for Melter {
                         if !pre_post_eq {
                             *sample = eq.process(*sample);
                         }
+
+                        // De-apply the gain
+                        *sample /= _gain;
                     }
                 });
             }

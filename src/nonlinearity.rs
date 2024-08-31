@@ -32,3 +32,41 @@ pub fn cubic(x: f32, drive: f32, offset: f32) -> f32 {
     let postgain = 1.0f32.max(1.0 / pregain);
     result * postgain
 }
+
+pub struct SlewDistortion {
+    pos_rate: f32,
+    neg_rate: f32,
+    last_sample: f32,
+}
+
+impl SlewDistortion {
+    pub fn new(pos_rate: f32, neg_rate: f32) -> Self {
+        SlewDistortion {
+            pos_rate: pos_rate.max(0.0),
+            neg_rate: neg_rate.max(0.0),
+            last_sample: 0.0,
+        }
+    }
+
+    pub fn process(&mut self, input: f32) -> f32 {
+        let diff = input - self.last_sample;
+        let slew_rate = if diff > 0.0 {
+            self.pos_rate
+        } else {
+            self.neg_rate
+        };
+        let slew_limited_diff = diff.signum() * f32::min(slew_rate, diff.abs());
+        self.last_sample += slew_limited_diff;
+
+        self.last_sample
+    }
+
+    // Setter methods for parameters
+    pub fn set_pos_rate(&mut self, rate: f32) {
+        self.pos_rate = rate.max(0.0);
+    }
+
+    pub fn set_neg_rate(&mut self, rate: f32) {
+        self.neg_rate = rate.max(0.0);
+    }
+}
